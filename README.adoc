@@ -1,15 +1,88 @@
-= Ansible Red Hat / Rocky Linux RPM Management Suite
+= Ansible Linux Patching Suite
 
-A production-ready Ansible playbook suite for managing RPM package updates and server reboots on Red Hat / Rocky Linux servers with robust error handling, detailed reporting, and flexible execution options.
+A production-ready Ansible playbook suite for managing OS package updates and server reboots, with robust error handling, detailed reporting, and flexible execution options.
+
+Covers *Red Hat / Rocky* (dnf) and *Ubuntu / Debian* (apt). `update.yml` detects the OS family per host and uses the right package manager, so one run can patch a mixed fleet.
 
 == 📦 Package Contents
 
-This package includes four files:
+. *update.yml* - Current playbook. Patches RedHat- and Debian-family hosts, reports what changed and which hosts need a reboot. Reboots nothing itself.
+. *inventory.yml.sample* - Inventory template. Copy to `inventory.yml`, which is gitignored.
+. *vars/default.yml* - Variables consumed by `update.yml`.
+. *rpm-update.yml* - Older RedHat-only playbook, superseded by `update.yml`.
+. *reboot_servers.yml* - Standalone playbook for rebooting servers.
+. *hosts.ini* - Older INI inventory, superseded by `inventory.yml`.
+. *README.adoc* - This documentation file.
 
-. *update_rpms.yml* - Main playbook for checking and updating RPM packages
-. *reboot_servers.yml* - Standalone playbook for rebooting servers
-. *hosts.ini* - Server inventory configuration
-. *README.md* - This documentation file
+NOTE: Most of the usage guide below still describes `update_rpms.yml` and `hosts.ini`. For the current playbook, see <<ubuntu>>.
+
+[[ubuntu]]
+== 🐧 Mixed Rocky and Ubuntu patching (update.yml)
+
+`update.yml` is the playbook to use. It gathers facts, branches on
+`ansible_facts['os_family']`, and runs `dnf` on RedHat-family hosts or
+`apt` (update, `upgrade: dist`, autoremove) on Debian-family hosts.
+
+It uses the `dnf` and `apt` modules rather than shelling out, so a run reports
+what actually changed instead of always reporting "ok".
+
+=== Inventory layout
+
+Copy the sample and edit it:
+
+[source,bash]
+----
+cp inventory.yml.sample inventory.yml
+----
+
+The sample defines two kinds of group:
+
+* *By OS version* - `rocky_9`, `rocky_10`, `ubuntu_22`, `ubuntu_24`, `debian_12` - for version-specific tasks.
+* *By role* - `mail`, `sites`, `infra`, `containers`, `hypervisors`, `k8s` - for targeting.
+
+`patch_routine` is the safe default sweep. It deliberately leaves out mail
+servers, hypervisors and Kubernetes nodes, which should be patched
+deliberately rather than as part of a routine run.
+
+A host may appear in several groups. Set `ansible_user` explicitly in
+`all.vars`: hosts given by `ansible_host` do not match a `~/.ssh/config` Host
+block, so Ansible would otherwise fall back to your local username.
+
+=== Running it
+
+[source,bash]
+----
+# dry run first - always
+ansible-playbook -i inventory.yml update.yml --limit patch_routine --check
+
+# for real, one host at a time (serial: 1)
+ansible-playbook -i inventory.yml update.yml --limit patch_routine
+
+# a single group, or a single host
+ansible-playbook -i inventory.yml update.yml --limit ubuntu_22
+ansible-playbook -i inventory.yml update.yml --limit somehost
+----
+
+=== Reboots
+
+`update.yml` never reboots. It ends by naming the hosts that need one:
+
+----
+TASK [Hosts needing a reboot]
+    "msg": "needs reboot: ['host1', 'host2']"
+----
+
+Detection order:
+
+. `/var/run/reboot-required` - authoritative on Debian/Ubuntu.
+. `needs-restarting -r` - RedHat; returns non-zero when a reboot is needed.
+. Newest installed kernel vs the running one, as a fallback.
+
+CAUTION: LXC containers share the hypervisor's kernel, so a kernel update
+inside one means nothing - only the node itself reboots. Containers are
+grouped separately in the sample for this reason.
+
+Reboot the listed hosts yourself, or with `reboot_servers.yml`.
 
 == ✨ Features
 
