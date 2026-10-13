@@ -34,3 +34,5 @@ coverage
 *.tmp
 *.bak
 *.swp
+# real inventory - host aliases and layout stay local
+inventory.yml

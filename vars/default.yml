@@ -1,0 +1,8 @@
+---
+# Referenced by update.yml's vars_files. Keep it present even when empty -
+# a missing file makes the playbook fail before the first task.
+
+# Reboot is not automated. After patching, check which hosts need one:
+#   ansible all -m shell -a 'needs-restarting -r; echo rc=$?'    # RedHat
+#   ansible all -m shell -a 'test -f /var/run/reboot-required'   # Debian/Ubuntu
+reboot_after_update: false
