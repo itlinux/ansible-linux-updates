@@ -1,0 +1,103 @@
+---
+# Sample inventory. Copy to inventory.yml and fill in your own hosts:
+#
+#   cp inventory.yml.sample inventory.yml
+#
+# inventory.yml is gitignored so the real one never leaves the machine.
+#
+# Host keys below are names, not addresses. Give each one an ansible_host,
+# or name it after a ~/.ssh/config Host block and leave ansible_host out -
+# then the user, key and any ProxyCommand come from SSH config.
+#
+# Routine patching:
+#   ansible-playbook -i inventory.yml update.yml --limit patch_routine --check
+#   ansible-playbook -i inventory.yml update.yml --limit patch_routine
+
+all:
+  vars:
+    ansible_ssh_private_key_file: ~/.ssh/your_key
+    # Hosts reached by ansible_host do not match a ~/.ssh/config Host block,
+    # so without this Ansible falls back to your local username.
+    ansible_user: root
+
+  children:
+
+    # ---- grouped by OS, for version-specific tasks ----
+
+    rocky_9:
+      hosts:
+        rocky9-app1:
+          ansible_host: 10.0.0.11
+        rocky9-app2:
+          ansible_host: 10.0.0.12
+
+    rocky_10:
+      hosts:
+        rocky10-web1:
+          ansible_host: 10.0.0.21
+
+    ubuntu_22:
+      hosts:
+        ubuntu22-web1:
+          ansible_host: 10.0.0.31
+
+    ubuntu_24:
+      hosts:
+        ubuntu24-nfs:
+          ansible_host: 10.0.0.41
+
+    debian_12:
+      hosts:
+        debian12-ct:
+          ansible_host: 10.0.0.51
+
+    # LXC containers share the host's kernel, so a kernel update inside one
+    # means nothing - only the hypervisor node reboots. apt/dnf work normally.
+    containers:
+      hosts:
+        debian12-ct:
+
+    # Hypervisors. Patch one at a time, and only with the cluster healthy.
+    hypervisors:
+      hosts:
+        node1:
+          ansible_host: 10.0.0.2
+        node2:
+          ansible_host: 10.0.0.3
+
+    # kubeadm cluster. Patching a control plane is a deliberate act and
+    # kubelet/kubeadm are pinned by the repo, so keep this out of the sweep.
+    # Drain workers before patching them.
+    k8s:
+      hosts:
+        k8s-master:
+          ansible_host: 10.0.1.10
+        k8s-worker1:
+          ansible_host: 10.0.1.11
+      vars:
+        ansible_user: youruser
+        ansible_become: true
+        ansible_become_method: sudo
+
+    # ---- grouped by role, for targeting ----
+
+    mail:
+      hosts:
+        rocky9-app1:
+
+    sites:
+      hosts:
+        rocky10-web1:
+        ubuntu22-web1:
+
+    infra:
+      hosts:
+        ubuntu24-nfs:
+
+    # Safe default sweep. Anything you would not patch unattended - mail,
+    # hypervisors, Kubernetes - stays out of this group on purpose.
+    patch_routine:
+      children:
+        sites:
+        infra:
+        containers:

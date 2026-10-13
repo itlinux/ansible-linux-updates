@@ -1,0 +1,114 @@
+---
+# OS update playbook. Handles Rocky/RHEL (dnf) and Ubuntu/Debian (apt).
+#
+#   ansi-on
+#   ap -i inventory.yml update.yml --limit patch_routine --check   # dry run
+#   ap -i inventory.yml update.yml --limit patch_routine           # for real
+#
+# Reboots are never automatic. The summary says which hosts need one.
+
+- name: Update servers with OS patching
+  hosts: all
+  serial: 1                 # one server at a time
+  gather_facts: true
+  become: true
+  vars_files:
+    - vars/default.yml
+
+  tasks:
+    - name: Detect OS version
+      ansible.builtin.debug:
+        msg: "{{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }} / kernel {{ ansible_facts['kernel'] }}"
+
+    - name: Update all packages (RedHat family)
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+      register: dnf_result
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Update apt cache (Debian family)
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Upgrade all packages (Debian family)
+      ansible.builtin.apt:
+        upgrade: dist
+      register: apt_result
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Remove packages no longer required (Debian family)
+      ansible.builtin.apt:
+        autoremove: true
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Check whether a reboot is required
+      ansible.builtin.shell: |
+        # Debian/Ubuntu: the stamp file is authoritative.
+        if [ -f /var/run/reboot-required ]; then
+          echo yes; exit 0
+        fi
+        # RedHat: needs-restarting returns 1 when a reboot is needed.
+        if command -v needs-restarting >/dev/null 2>&1; then
+          needs-restarting -r >/dev/null 2>&1 && echo no || echo yes; exit 0
+        fi
+        # Fallback: newest installed kernel vs the running one. Guard against
+        # an empty result, or every host looks like it needs a reboot.
+        # Test that rpm actually manages the kernel here: rpm is installed on
+        # some Ubuntu hosts, where "rpm -q kernel" prints a non-version string.
+        if command -v rpm >/dev/null 2>&1 && rpm -q kernel >/dev/null 2>&1; then
+          latest=$(rpm -q kernel --last 2>/dev/null | head -1 | awk '{print $1}' | sed 's/^kernel-//')
+        else
+          latest=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*vmlinuz-||' | sort -V | tail -1)
+        fi
+        if [ -n "$latest" ] && [ "$(uname -r)" != "$latest" ]; then
+          echo yes
+        else
+          echo no
+        fi
+      register: reboot_check
+      changed_when: false
+      check_mode: false
+
+    - name: Record this host's result
+      ansible.builtin.set_fact:
+        pkg_changed: "{{ (dnf_result.changed | default(false)) or (apt_result.changed | default(false)) }}"
+        needs_reboot: "{{ reboot_check.stdout.strip() == 'yes' }}"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ 'packages updated' if pkg_changed | bool else 'already current' }},
+          {{ 'REBOOT REQUIRED' if needs_reboot | bool else 'no reboot needed' }}
+
+- name: Summary
+  hosts: all
+  gather_facts: false
+  become: false
+  run_once: true
+  tasks:
+    - name: Hosts that were updated
+      ansible.builtin.debug:
+        msg: >-
+          updated:
+          {{ ansible_play_hosts_all
+             | map('extract', hostvars)
+             | selectattr('pkg_changed', 'defined')
+             | selectattr('pkg_changed')
+             | map(attribute='inventory_hostname')
+             | list }}
+
+    - name: Hosts needing a reboot
+      ansible.builtin.debug:
+        msg: >-
+          needs reboot:
+          {{ ansible_play_hosts_all
+             | map('extract', hostvars)
+             | selectattr('needs_reboot', 'defined')
+             | selectattr('needs_reboot')
+             | map(attribute='inventory_hostname')
+             | list }}
